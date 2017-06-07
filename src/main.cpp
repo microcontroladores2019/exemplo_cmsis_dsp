@@ -74,6 +74,7 @@ void MP45DT02_config(void)
 	Pins.GPIO_Speed = GPIO_Speed_50MHz; //MP45DT02 DataSheet pg 7: max clock freq : 3.25MHz
 	Pins.GPIO_Mode = GPIO_Mode_AF; //configure GPIOB to use the MP45DT02 module, Alternate 									 									 Function
 	GPIO_Init(GPIOB, &Pins);
+	GPIO_PinAFConfig(GPIOB, GPIO_PinSource10, GPIO_AF_SPI2);
 
 	//configuring MP45DT02' DOUT: GPIOC Pin3
 	Pins.GPIO_Pin = GPIO_Pin_3;
@@ -110,8 +111,6 @@ void MP45DT02_config(void)
 
     //enable the Rx buffer for not empty interrupt ( SPI_I2S_IT_RXNE : IT-> interrupt, RXNE-> Rx 																						Not Empty
     SPI_I2S_ITConfig(SPI2, SPI_I2S_IT_RXNE, ENABLE);
-
-    AudioRecEnable = 1;
 }
 
 void fftConfig(void)
@@ -152,6 +151,8 @@ void AudioRecStart(void)
 
 		I2S_Cmd(SPI2, ENABLE);
 
+		SPI_I2S_SendData(SPI2, 0x01); //sends dummy bit for communication
+
 	}
 }
 
@@ -170,6 +171,13 @@ void SPI2_IRQHandler(void)
 {
 	u16 measurement;
 
+	while(!SPI_I2S_GetFlagStatus(SPI2, SPI_I2S_FLAG_RXNE));
+	SPI_I2S_ReceiveData(SPI2); //Clear RXNE bit
+
+	while(!SPI_I2S_GetFlagStatus(SPI2, SPI_I2S_FLAG_TXE));
+	SPI_I2S_SendData(SPI2, 0x00); //Dummy byte to generate clock
+	while(!SPI_I2S_GetFlagStatus(SPI2, SPI_I2S_FLAG_RXNE));
+
 	//Checks for SPI-I2S non empty Rx and calls for interruption
 	if(SPI_GetITStatus(SPI2, SPI_I2S_IT_RXNE) != RESET)
 	{
@@ -184,7 +192,7 @@ void SPI2_IRQHandler(void)
 	    	FilterEnable = 1;
 	    	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 	    	//notification of the PDM filtering task coming from SPI2 Interrupt Service Routine
-	    	xTaskNotifyFromISR(PDM_Filter_task, 0 , eNoAction, &xHigherPriorityTaskWoken);
+	    	xTaskNotifyFromISR(PDM_Filter_task, 1 , eNoAction, &xHigherPriorityTaskWoken);
 	    	//interrupt returns directily to the highest priority task, witch is set to pdTrue in the line above
 	    	portEND_SWITCHING_ISR(xHigherPriorityTaskWoken);
 	    }
@@ -196,7 +204,7 @@ extern "C" void EXTI0_IRQHandler()
 {
 	EXTI_ClearITPendingBit(USER_BUTTON_EXTI_LINE);
 	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-	xTaskNotifyFromISR(ButtonReader_task, 0, eNoAction, &xHigherPriorityTaskWoken);
+	xTaskNotifyFromISR(ButtonReader_task, 1, eNoAction, &xHigherPriorityTaskWoken);
 	portEND_SWITCHING_ISR(xHigherPriorityTaskWoken);
 }
 
@@ -226,14 +234,15 @@ void Store_Analyse(void *p)
 {
 	q15_t maxAmplitude;
 	uint32_t peakIndex;
+	uint32_t temp;
 
 	for(;;)
 	{
-
+		temp = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 		arm_cfft_radix4_q15(& fftConfigStruct, PDM_Buffer);     						// process data, computing fft
 		arm_cmplx_mag_q15(PCM_Buffer, fft_Buffer,(uint32_t) fft_Size); 							// computes complex amplitudes
 		arm_max_q15(fft_Buffer, (uint32_t) fft_Size, &maxAmplitude, &peakIndex); 		// analyses amplidete array and sends maxAplitude
-																						// value and maxAmplitude index
+		// value and maxAmplitude index
 		if(peakIndex < 32)
 		{
 			STM_EVAL_LEDOff(LED4);
@@ -242,12 +251,12 @@ void Store_Analyse(void *p)
 			STM_EVAL_LEDOn(LED3);
 		}
 		else if( peakIndex < 64)
-			{
-				STM_EVAL_LEDOff(LED3);
-				STM_EVAL_LEDOff(LED5);
-				STM_EVAL_LEDOff(LED6);
-				STM_EVAL_LEDOn(LED4);
-			}
+		{
+			STM_EVAL_LEDOff(LED3);
+			STM_EVAL_LEDOff(LED5);
+			STM_EVAL_LEDOff(LED6);
+			STM_EVAL_LEDOn(LED4);
+		}
 		else if (peakIndex < 96)
 		{
 			STM_EVAL_LEDOff(LED3);
@@ -272,18 +281,20 @@ void Store_Analyse(void *p)
 			Data_index ++;
 			PCM_index ++;
 		}
-/*		for(int i = 0;  i< fft_Size; i++)
-		{
-			DataStorage[i + CurrentDataSize] = PCM_Buffer[i];
-		}
-		CurrentDataSize = CurrentDataSize + fft_Size;*/
+		/*		for(int i = 0;  i< fft_Size; i++)
+			{
+				DataStorage[i + CurrentDataSize] = PCM_Buffer[i];
+			}
+			CurrentDataSize = CurrentDataSize + fft_Size;*/
 	}
 }
 
 void PDM_Filter(void *p)
 {
+	uint32_t temp;
 	for(;;)
 	{
+		temp = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 		if(FilterEnable)//for security, checks if the PDM data is ready for filtering, otherwise, it could filter trash data
 		{
 			u16 volume = 50;
@@ -297,13 +308,15 @@ void PDM_Filter(void *p)
 
 void ButtonReader(void *p)
 {
+	uint32_t temp;
 	for( ;; )
 	{
 		AudioRecEnable = ~AudioRecEnable;
+		temp = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 		if(AudioRecEnable)
 		{
 			//Enables LEDs at the start of recording
-			Init_LEDS();
+			STM_EVAL_LEDOn(LED3);
 			AudioRecStart();
 		}
 		if(AudioRecEnable == 0)
@@ -316,14 +329,15 @@ void ButtonReader(void *p)
 			PDM_index = PDM_Buffer; 	//pointer back to PDM_Buffer[0]'s adress
 			PCM_index = PCM_Buffer;
 			Data_index = DataStorage;
-
 		}
 	}
 }
 
 int main(void)
 {
+	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_4);
 	MP45DT02_config();
+	Init_LEDS();
 	STM_EVAL_PBInit(BUTTON_USER, BUTTON_MODE_EXTI); //initialize Button for start and finish recording
 	fftConfig();
 	//taskCreator();
@@ -336,21 +350,21 @@ int main(void)
 				& fft_task );
 
 
-		xTaskCreate( 	PDM_Filter,
-				( const char * ) "pdm",
-				configMINIMAL_STACK_SIZE,
-				NULL ,
-				configMAX_PRIORITIES - 1,
-				& PDM_Filter_task );
+	xTaskCreate( 	PDM_Filter,
+			( const char * ) "pdm",
+			configMINIMAL_STACK_SIZE,
+			NULL ,
+			configMAX_PRIORITIES - 1,
+			& PDM_Filter_task );
 
-		xTaskCreate( 	ButtonReader,
-				( const char * ) "but",
-				configMINIMAL_STACK_SIZE,
-				NULL ,
-				tskIDLE_PRIORITY,
-				& ButtonReader_task );
+	xTaskCreate( 	ButtonReader,
+			( const char * ) "but",
+			configMINIMAL_STACK_SIZE,
+			NULL ,
+			tskIDLE_PRIORITY,
+			& ButtonReader_task );
 
-		vTaskStartScheduler(); //creates scheduler for tasks defined above
+	vTaskStartScheduler(); //creates scheduler for tasks defined above
 
 
   /* Infinite loop */
