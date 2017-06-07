@@ -258,6 +258,7 @@
 
 #define __CMSIS_GENERIC         /* disable NVIC and Systick functions */
 
+#define ARM_MATH_CM4
 #if defined (ARM_MATH_CM4)
 #include "core_cm4.h"
 #elif defined (ARM_MATH_CM3)
@@ -5925,19 +5926,19 @@ extern "C"
    */
 
 
-  __STATIC_INLINE q31_t arm_linear_interp_q31(
+  /*__STATIC_INLINE q31_t arm_linear_interp_q31(
   q31_t * pYData,
   q31_t x,
   uint32_t nValues)
   {
-    q31_t y;                                     /* output */
-    q31_t y0, y1;                                /* Nearest output values */
-    q31_t fract;                                 /* fractional part */
-    int32_t index;                               /* Index to read nearest output values */
+    q31_t y;                                      output
+    q31_t y0, y1;                                 Nearest output values
+    q31_t fract;                                  fractional part
+    int32_t index;                                Index to read nearest output values
 
-    /* Input is in 12.20 format */
-    /* 12 bits for the table index */
-    /* Index value calculation */
+     Input is in 12.20 format
+     12 bits for the table index
+     Index value calculation
     index = ((x & 0xFFF00000) >> 20);
 
     if(index >= (nValues - 1))
@@ -5951,27 +5952,27 @@ extern "C"
     else
     {
 
-      /* 20 bits for the fractional part */
-      /* shift left by 11 to keep fract in 1.31 format */
+       20 bits for the fractional part
+       shift left by 11 to keep fract in 1.31 format
       fract = (x & 0x000FFFFF) << 11;
 
-      /* Read two nearest output values from the index in 1.31(q31) format */
+       Read two nearest output values from the index in 1.31(q31) format
       y0 = pYData[index];
       y1 = pYData[index + 1u];
 
-      /* Calculation of y0 * (1-fract) and y is in 2.30 format */
+       Calculation of y0 * (1-fract) and y is in 2.30 format
       y = ((q31_t) ((q63_t) y0 * (0x7FFFFFFF - fract) >> 32));
 
-      /* Calculation of y0 * (1-fract) + y1 *fract and y is in 2.30 format */
+       Calculation of y0 * (1-fract) + y1 *fract and y is in 2.30 format
       y += ((q31_t) (((q63_t) y1 * fract) >> 32));
 
-      /* Convert y to 1.31 format */
+       Convert y to 1.31 format
       return (y << 1u);
 
     }
 
   }
-
+*/
   /**
    *
    * @brief  Process function for the Q15 Linear Interpolation Function.
