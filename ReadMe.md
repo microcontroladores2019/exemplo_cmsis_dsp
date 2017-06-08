@@ -38,11 +38,14 @@ Todos os passos suprecitados foram empregados utilizando os recursos de FreeRTOS
   - A implementação das bibliotecas foi possível devido à ajuda do professor Luiz Renault. 
 
 ### Fluxograma 
-
+![alt text][fluxograma]
+[fluxograma]:[https://gitlab.luizrenault.com/microcontroladores-2017/machado/blob/master/fluxograma.PNG]
 ### Diagrama em Blocos
-
+![alt text][diagrama de blocos]
+[diagrama de blocos]:[https://gitlab.luizrenault.com/microcontroladores-2017/machado/blob/master/diagrama%20de%20blocos.PNG]
 ### Pinagem
-
+![alt text][pinos]
+[pinos]:[https://gitlab.luizrenault.com/microcontroladores-2017/machado/blob/master/pinos.PNG]
 
 
 
