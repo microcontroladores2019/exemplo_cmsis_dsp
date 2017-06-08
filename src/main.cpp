@@ -24,9 +24,10 @@ TaskHandle_t ButtonReader_task; 	// task 3
 #define fs 16000
 #define DECIMATION 64
 #define fft_Size 256
-static q15_t PCM_Buffer[fft_Size];				// Buffer of PCM data before fft and storage
-static q15_t fft_Buffer[fft_Size/2];			// Buffer of fft results
-#define PDM_Buffer_Size DECIMATION*fft_Size
+static q15_t PCM_Buffer[fft_Size/2];				// Buffer of PCM data before fft and storage
+static q15_t fft_Buffer[fft_Size];			// Buffer of fft results
+static q15_t mag_Buffer[fft_Size/2];			// Buffer of mag results
+#define PDM_Buffer_Size DECIMATION*fft_Size/2
 static q15_t PDM_Buffer[PDM_Buffer_Size]; 		// Buffer of PDM data before filtering
 
 static uint8_t FilterEnable = 0;				// Enable PDM to PCM filtering
@@ -49,7 +50,8 @@ static uint16_t fftSize = 256;
 
 //configuring FFT DSP Arquitecture
 arm_status MathOpStatus;
-arm_cfft_radix4_instance_q15 fftConfigStruct;
+arm_rfft_instance_q15 fftConfigStruct;
+arm_cfft_radix4_instance_q15 cfftConfigStruct;
 
 
 void MP45DT02_config(void)
@@ -59,8 +61,8 @@ void MP45DT02_config(void)
 
 	//configuring PDM Conditioning Audio Filter
 	Filter.Fs = fs;
-	Filter.LP_HZ = 10; //frequency bellow human audition capacities (20 Hz)
-	Filter.HP_HZ = 22000; //frequency above human audition capacities (20 kHz)
+	Filter.LP_HZ = 22000; //frequency bellow human audition capacities (20 Hz)
+	Filter.HP_HZ = 10; //frequency above human audition capacities (20 kHz)
 	Filter.Out_MicChannels = 1; //defines the number of microphones in the output stream
 	Filter.In_MicChannels = 1;
 	PDM_Filter_Init(&Filter);
@@ -86,10 +88,9 @@ void MP45DT02_config(void)
     NVIC_InitTypeDef nvic;
 
     nvic.NVIC_IRQChannel = SPI2_IRQn; //
-    nvic.NVIC_IRQChannelPreemptionPriority = 0;
-    nvic.NVIC_IRQChannelSubPriority = 0;
+    nvic.NVIC_IRQChannelPreemptionPriority = 0x0F;
+    nvic.NVIC_IRQChannelSubPriority = 0x0F;
     nvic.NVIC_IRQChannelCmd = ENABLE;
-
     NVIC_Init(&nvic);
 
 
@@ -100,14 +101,13 @@ void MP45DT02_config(void)
     I2S_InitTypeDef i2s;
 
     SPI_I2S_DeInit(SPI2);
-    i2s.I2S_AudioFreq = fs*DECIMATION; // fs*decimation; fs = 16k, decimation = 64
+    i2s.I2S_AudioFreq = fs*2; // fs*decimation; fs = 16k, decimation = 64
     i2s.I2S_Standard = I2S_Standard_LSB; //specifies standart use of I2S communication
     i2s.I2S_DataFormat = I2S_DataFormat_16b; //interruption after 16 bit array is aquired
     i2s.I2S_CPOL = I2S_CPOL_High; //clock polarity high : samples taken for high level clock
     i2s.I2S_Mode = I2S_Mode_MasterRx;
     i2s.I2S_MCLKOutput = I2S_MCLKOutput_Disable;
     I2S_Init(SPI2, &i2s);
-    I2S_Cmd(SPI2, ENABLE);
 
     //enable the Rx buffer for not empty interrupt ( SPI_I2S_IT_RXNE : IT-> interrupt, RXNE-> Rx 																						Not Empty
     SPI_I2S_ITConfig(SPI2, SPI_I2S_IT_RXNE, ENABLE);
@@ -116,7 +116,7 @@ void MP45DT02_config(void)
 void fftConfig(void)
 {
 	arm_status MathOpStatus;
-	arm_cfft_radix4_instance_q15 fftConfigStruct; // creates a structure for performing a fft to a 16bit data sample
+//	arm_cfft_radix4_instance_q15 fftConfigStruct; // creates a structure for performing a fft to a 16bit data sample
 												  // PCM data from filters come in 16bit size
 
 	uint8_t ifftFlag = 0 ; 	 //flag for forward or backward fft operation, set to 0 selects forward fft
@@ -127,7 +127,7 @@ void fftConfig(void)
 
 	//Initializing the FFT module
 	//starting the fft configuration structure
-	MathOpStatus = arm_cfft_radix4_init_q15(&fftConfigStruct,  fftSize, ifftFlag, bitReversal);
+	MathOpStatus = arm_rfft_init_q15(&fftConfigStruct, &cfftConfigStruct, fftSize/2, ifftFlag, bitReversal);
 
 	if(MathOpStatus != ARM_MATH_SUCCESS)
 	{
@@ -146,13 +146,7 @@ void AudioRecStart(void)
 	//check for initialization of the communication protocols
 	if(AudioRecEnable)
 	{
-		//enable the Rx buffer for not empty interrupt
-		SPI_I2S_ITConfig(SPI2, SPI_I2S_IT_RXNE, ENABLE);
-
 		I2S_Cmd(SPI2, ENABLE);
-
-		SPI_I2S_SendData(SPI2, 0x01); //sends dummy bit for communication
-
 	}
 }
 
@@ -167,28 +161,19 @@ void AudioRecStop(void)
 }
 
 //SP2 Interrupt Service Routine
-void SPI2_IRQHandler(void)
+extern "C" void SPI2_IRQHandler(void)
 {
 	u16 measurement;
-
-	while(!SPI_I2S_GetFlagStatus(SPI2, SPI_I2S_FLAG_RXNE));
-	SPI_I2S_ReceiveData(SPI2); //Clear RXNE bit
-
-	while(!SPI_I2S_GetFlagStatus(SPI2, SPI_I2S_FLAG_TXE));
-	SPI_I2S_SendData(SPI2, 0x00); //Dummy byte to generate clock
-	while(!SPI_I2S_GetFlagStatus(SPI2, SPI_I2S_FLAG_RXNE));
-
 	//Checks for SPI-I2S non empty Rx and calls for interruption
 	if(SPI_GetITStatus(SPI2, SPI_I2S_IT_RXNE) != RESET)
 	{
-		int index = 0;
+		static int index = 0;
 	    measurement = SPI_I2S_ReceiveData(SPI2);
-	    PDM_index++;
-	    index++;
-	    *PDM_index = HTONS(measurement);		//memory adress pointed by PDM_index, PDM_Buffer[&PDM_index], receives value
+	    PDM_Buffer[index++]=HTONS(measurement);
 
-	    if(index == PDM_Buffer_Size - 1)
+	    if(index >= PDM_Buffer_Size)
 	    {
+	    	index=0;
 	    	FilterEnable = 1;
 	    	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 	    	//notification of the PDM filtering task coming from SPI2 Interrupt Service Routine
@@ -196,6 +181,7 @@ void SPI2_IRQHandler(void)
 	    	//interrupt returns directily to the highest priority task, witch is set to pdTrue in the line above
 	    	portEND_SWITCHING_ISR(xHigherPriorityTaskWoken);
 	    }
+	    SPI_I2S_ClearITPendingBit(SPI2, SPI_I2S_IT_RXNE);
 	}
 }
 
@@ -239,48 +225,57 @@ void Store_Analyse(void *p)
 	for(;;)
 	{
 		temp = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-		arm_cfft_radix4_q15(& fftConfigStruct, PDM_Buffer);     						// process data, computing fft
-		arm_cmplx_mag_q15(PCM_Buffer, fft_Buffer,(uint32_t) fft_Size); 							// computes complex amplitudes
-		arm_max_q15(fft_Buffer, (uint32_t) fft_Size, &maxAmplitude, &peakIndex); 		// analyses amplidete array and sends maxAplitude
+		arm_rfft_q15(& fftConfigStruct, PCM_Buffer, fft_Buffer);     						// process data, computing fft
+		arm_cmplx_mag_squared_q15(fft_Buffer, mag_Buffer,(uint32_t) fft_Size/2); 							// computes complex amplitudes
+		arm_max_q15(mag_Buffer, (uint32_t) fft_Size/4, &maxAmplitude, &peakIndex); 		// analyses amplidete array and sends maxAplitude
 		// value and maxAmplitude index
-		if(peakIndex < 32)
-		{
+		if(maxAmplitude>3){
+			peakIndex-=5;
+			if(peakIndex>16) peakIndex=16;
+			peakIndex*=4;
+			if(peakIndex < 16)
+			{
+				STM_EVAL_LEDOff(LED4);
+				STM_EVAL_LEDOff(LED5);
+				STM_EVAL_LEDOff(LED6);
+				STM_EVAL_LEDOn(LED3);
+			}
+			else if( peakIndex < 32)
+			{
+				STM_EVAL_LEDOff(LED3);
+				STM_EVAL_LEDOff(LED5);
+				STM_EVAL_LEDOff(LED6);
+				STM_EVAL_LEDOn(LED4);
+			}
+			else if (peakIndex < 48)
+			{
+				STM_EVAL_LEDOff(LED3);
+				STM_EVAL_LEDOff(LED4);
+				STM_EVAL_LEDOff(LED6);
+				STM_EVAL_LEDOn(LED5);
+			}
+			else
+			{
+				STM_EVAL_LEDOff(LED3);
+				STM_EVAL_LEDOff(LED4);
+				STM_EVAL_LEDOff(LED5);
+				STM_EVAL_LEDOn(LED6);
+			}
+		} else {
+			STM_EVAL_LEDOff(LED3);
 			STM_EVAL_LEDOff(LED4);
 			STM_EVAL_LEDOff(LED5);
 			STM_EVAL_LEDOff(LED6);
-			STM_EVAL_LEDOn(LED3);
-		}
-		else if( peakIndex < 64)
-		{
-			STM_EVAL_LEDOff(LED3);
-			STM_EVAL_LEDOff(LED5);
-			STM_EVAL_LEDOff(LED6);
-			STM_EVAL_LEDOn(LED4);
-		}
-		else if (peakIndex < 96)
-		{
-			STM_EVAL_LEDOff(LED3);
-			STM_EVAL_LEDOff(LED4);
-			STM_EVAL_LEDOff(LED6);
-			STM_EVAL_LEDOn(LED5);
-		}
-
-		else
-		{
-			STM_EVAL_LEDOff(LED3);
-			STM_EVAL_LEDOff(LED4);
-			STM_EVAL_LEDOff(LED5);
-			STM_EVAL_LEDOn(LED6);
 		}
 
 
-		while(Data_index < DataStorage + fftSize)
-		{
-			PCM_index = PCM_Buffer;
-			*Data_index = *PCM_index;
-			Data_index ++;
-			PCM_index ++;
-		}
+//		while(Data_index < DataStorage + fftSize)
+//		{
+//			PCM_index = PCM_Buffer;
+//			*Data_index = *PCM_index;
+//			Data_index ++;
+//			PCM_index ++;
+//		}
 		/*		for(int i = 0;  i< fft_Size; i++)
 			{
 				DataStorage[i + CurrentDataSize] = PCM_Buffer[i];
@@ -291,15 +286,15 @@ void Store_Analyse(void *p)
 
 void PDM_Filter(void *p)
 {
-	uint32_t temp;
+	u16 volume = 50;
 	for(;;)
 	{
-		temp = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 		if(FilterEnable)//for security, checks if the PDM data is ready for filtering, otherwise, it could filter trash data
 		{
-			u16 volume = 50;
-
-			PDM_Filter_64_LSB((uint8_t *)PDM_Buffer,  (uint16_t *)PCM_Buffer, volume , (PDMFilter_InitStruct *)&Filter);
+			for(int i=0;i<(fftSize/2/16);i++){
+				PDM_Filter_64_LSB((uint8_t *)(PDM_Buffer+64*i),  (uint16_t *)(PCM_Buffer+16*i), volume , (PDMFilter_InitStruct *)&Filter);
+			}
 			FilterEnable = 0;
 			xTaskNotify( fft_task, 0, eNoAction);
 		}
@@ -344,7 +339,7 @@ int main(void)
 
 	xTaskCreate( 	Store_Analyse,
 				( const char * ) "fft",
-				configMINIMAL_STACK_SIZE,
+				1000,
 				NULL,
 				2,
 				& fft_task );
